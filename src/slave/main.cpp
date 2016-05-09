@@ -19,6 +19,8 @@
 #include <vector>
 #include <utility>
 
+#include <mesos/authorizer/authorizer.hpp>
+
 #include <mesos/master/detector.hpp>
 
 #include <mesos/mesos.hpp>
@@ -71,6 +73,7 @@ using mesos::master::detector::MasterDetector;
 using mesos::slave::QoSController;
 using mesos::slave::ResourceEstimator;
 
+using mesos::Authorizer;
 using mesos::SlaveInfo;
 
 using process::Owned;
@@ -178,23 +181,6 @@ int main(int argc, char** argv)
     return EXIT_FAILURE;
   }
 
-  // Initialize modules. Note that since other subsystems may depend
-  // upon modules, we should initialize modules before anything else.
-  if (flags.modules.isSome()) {
-    Try<Nothing> result = ModuleManager::load(flags.modules.get());
-    if (result.isError()) {
-      EXIT(EXIT_FAILURE) << "Error loading modules: " << result.error();
-    }
-  }
-
-  // Initialize hooks.
-  if (flags.hooks.isSome()) {
-    Try<Nothing> result = HookManager::initialize(flags.hooks.get());
-    if (result.isError()) {
-      EXIT(EXIT_FAILURE) << "Error installing hooks: " << result.error();
-    }
-  }
-
   // Initialize libprocess.
   if (ip_discovery_command.isSome() && ip.isSome()) {
     EXIT(EXIT_FAILURE) << flags.usage(
@@ -225,9 +211,32 @@ int main(int argc, char** argv)
 
   const string id = process::ID::generate("slave"); // Process ID.
 
-  process::initialize(id);
+  // If `process::initialize()` returns `false`, then it was called before this
+  // invocation, meaning the authentication realm for libprocess-level HTTP
+  // endpoints was set incorrectly. This should be the first invocation.
+  if (!process::initialize(id, DEFAULT_HTTP_AUTHENTICATION_REALM)) {
+    EXIT(EXIT_FAILURE) << "The call to `process::initialize()` in the agent's "
+                       << "`main()` was not the function's first invocation";
+  }
 
   logging::initialize(argv[0], flags, true); // Catch signals.
+
+  // Initialize modules. Note that since other subsystems may depend
+  // upon modules, we should initialize modules before anything else.
+  if (flags.modules.isSome()) {
+    Try<Nothing> result = ModuleManager::load(flags.modules.get());
+    if (result.isError()) {
+      EXIT(EXIT_FAILURE) << "Error loading modules: " << result.error();
+    }
+  }
+
+  // Initialize hooks.
+  if (flags.hooks.isSome()) {
+    Try<Nothing> result = HookManager::initialize(flags.hooks.get());
+    if (result.isError()) {
+      EXIT(EXIT_FAILURE) << "Error installing hooks: " << result.error();
+    }
+  }
 
   spawn(new VersionProcess(), true);
 
@@ -280,6 +289,32 @@ int main(int argc, char** argv)
   }
 
   MasterDetector* detector = detector_.get();
+
+  Option<Authorizer*> authorizer_ = None();
+
+  string authorizerName = flags.authorizer;
+
+  Result<Authorizer*> authorizer((None()));
+  if (authorizerName != slave::DEFAULT_AUTHORIZER) {
+    LOG(INFO) << "Creating '" << authorizerName << "' authorizer";
+
+    // NOTE: The contents of --acls will be ignored.
+    authorizer = Authorizer::create(authorizerName);
+  } else {
+    // `authorizerName` is `DEFAULT_AUTHORIZER` at this point.
+    if (flags.acls.isSome()) {
+      LOG(INFO) << "Creating default '" << authorizerName << "' authorizer";
+
+      authorizer = Authorizer::create(flags.acls.get());
+    }
+  }
+
+  if (authorizer.isError()) {
+    EXIT(EXIT_FAILURE) << "Could not create '" << authorizerName
+                       << "' authorizer: " << authorizer.error();
+  } else if (authorizer.isSome()) {
+    authorizer_ = authorizer.get();
+  }
 
   if (flags.firewall_rules.isSome()) {
     vector<Owned<FirewallRule>> rules;
@@ -350,7 +385,8 @@ int main(int argc, char** argv)
       &gc,
       &statusUpdateManager,
       resourceEstimator.get(),
-      qosController.get());
+      qosController.get(),
+      authorizer_);
 
   process::spawn(slave);
   process::wait(slave->self());
@@ -364,6 +400,10 @@ int main(int argc, char** argv)
   delete detector;
 
   delete containerizer.get();
+
+  if (authorizer_.isSome()) {
+    delete authorizer_.get();
+  }
 
   return EXIT_SUCCESS;
 }

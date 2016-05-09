@@ -104,6 +104,7 @@ using std::list;
 using std::map;
 using std::set;
 using std::string;
+using std::tuple;
 using std::vector;
 
 using process::async;
@@ -133,7 +134,8 @@ Slave::Slave(const std::string& id,
              GarbageCollector* _gc,
              StatusUpdateManager* _statusUpdateManager,
              ResourceEstimator* _resourceEstimator,
-             QoSController* _qosController)
+             QoSController* _qosController,
+             const Option<Authorizer*>& _authorizer)
   : ProcessBase(id),
     state(RECOVERING),
     flags(_flags),
@@ -154,7 +156,8 @@ Slave::Slave(const std::string& id,
     reauthenticate(false),
     executorDirectoryMaxAllowedAge(age(0)),
     resourceEstimator(_resourceEstimator),
-    qosController(_qosController) {}
+    qosController(_qosController),
+    authorizer(_authorizer) {}
 
 
 Slave::~Slave()
@@ -756,6 +759,11 @@ void Slave::initialize()
         [http](const process::http::Request& request,
                const Option<string>& principal) {
           return http.statistics(request, principal);
+        });
+  route("/containers",
+        Http::CONTAINERS_HELP(),
+        [http](const process::http::Request& request) {
+          return http.containers(request);
         });
 
   // Expose the log file for the webui. Fall back to 'log_dir' if
@@ -1823,10 +1831,18 @@ void Slave::_runTask(
   switch (executor->state) {
     case Executor::TERMINATING:
     case Executor::TERMINATED: {
+      string executorState;
+
+      if (executor->state == Executor::TERMINATING) {
+        executorState = "terminating";
+      } else {
+        executorState = "terminated";
+      }
+
       LOG(WARNING) << "Asked to run task '" << task.task_id()
                    << "' for framework " << frameworkId
                    << " with executor '" << executorId
-                   << "' which is terminating/terminated";
+                   << "' which is " << executorState;
 
       const StatusUpdate update = protobuf::createStatusUpdate(
           frameworkId,
@@ -1835,7 +1851,7 @@ void Slave::_runTask(
           TASK_LOST,
           TaskStatus::SOURCE_SLAVE,
           UUID::random(),
-          "Executor terminating/terminated",
+          "Executor " + executorState,
           TaskStatus::REASON_EXECUTOR_TERMINATED);
 
       statusUpdate(update, UPID());
@@ -2167,10 +2183,14 @@ void Slave::killTask(
       break;
     }
     case Executor::TERMINATING:
+      LOG(WARNING) << "Ignoring kill task " << taskId
+                   << " because the executor " << *executor
+                   << " is terminating";
+      break;
     case Executor::TERMINATED:
       LOG(WARNING) << "Ignoring kill task " << taskId
                    << " because the executor " << *executor
-                   << " is terminating/terminated";
+                   << " is terminated";
       break;
     case Executor::RUNNING: {
       if (executor->queuedTasks.contains(taskId)) {
@@ -3780,6 +3800,8 @@ ExecutorInfo Slave::getExecutorInfo(
       executor.mutable_container()->CopyFrom(task.container());
     }
 
+    // TODO(jieyu): We should move those Mesos containerizer specific
+    // logic (e.g., 'hasRootfs') to Mesos containerizer.
     bool hasRootfs = task.has_container() &&
                      task.container().type() == ContainerInfo::MESOS &&
                      task.container().mesos().has_image();
@@ -3787,42 +3809,15 @@ ExecutorInfo Slave::getExecutorInfo(
     if (hasRootfs) {
       ContainerInfo* container = executor.mutable_container();
 
-      // For command-tasks, we are now copying the entire `task.container` into
-      // the `executorInfo`. Thus, `executor.container` now has the image if
-      // `task.container` had one. However, in case of rootfs, we want to run
-      // the command executor in the host filesystem and prepare/mount the image
-      // into the container as a volume (command executor will use pivot_root to
-      // mount the image). For this reason, we need to strip the image in
+      // For command tasks, we are now copying the entire
+      // `task.container` into the `executorInfo`. Thus,
+      // `executor.container` now has the image if `task.container`
+      // had one. However, in the case of Mesos container with rootfs,
+      // we want to run the command executor in the host filesystem
+      // and let the command executor pivot_root to the rootfs for its
+      // task. For this reason, we need to strip the image in
       // `executor.container.mesos`.
       container->mutable_mesos()->clear_image();
-
-      // As we will chroot in the command executor into a new rootfs,
-      // we need to modify the volume mount points to be under the new rootfs
-      // so the container path that the task sees is correct.
-      // NOTE: We only need to modify volumes with absolute path since
-      // relative paths are mounted in the sandbox and will automatically be
-      // mounted into the rootfs.
-      for (int i = 0; i < container->volumes_size(); ++i) {
-        Volume* volume = container->mutable_volumes(i);
-        if (path::absolute(volume->container_path())) {
-          volume->set_container_path(path::join(
-              COMMAND_EXECUTOR_ROOTFS_CONTAINER_PATH,
-              volume->container_path()));
-        }
-      }
-
-      container->set_type(ContainerInfo::MESOS);
-      Volume* volume = container->add_volumes();
-      volume->mutable_image()->CopyFrom(task.container().mesos().image());
-      volume->set_container_path(COMMAND_EXECUTOR_ROOTFS_CONTAINER_PATH);
-      volume->set_mode(Volume::RW);
-
-      size_t volumesSize = container->volumes_size();
-      if (volumesSize > 1) {
-        // Move the rootfs volume to the front as the other volumes
-        // will be mounting under the rootfs directory that's added last.
-        container->mutable_volumes()->SwapElements(0, volumesSize - 1);
-      }
 
       // We need to set the executor user as root as it needs to
       // perform chroot (even when switch_user is set to false).
@@ -4405,11 +4400,17 @@ void Slave::shutdownExecutor(
         executor->state == Executor::TERMINATED)
     << executor->state;
 
-  if (executor->state == Executor::TERMINATING ||
-      executor->state == Executor::TERMINATED) {
+  if (executor->state == Executor::TERMINATING) {
     LOG(WARNING) << "Ignoring shutdown executor '" << executorId
                  << "' of framework " << frameworkId
-                 << " because the executor is terminating/terminated";
+                 << " because the executor is terminating";
+    return;
+  }
+
+  if (executor->state == Executor::TERMINATED) {
+    LOG(WARNING) << "Ignoring shutdown executor '" << executorId
+                 << "' of framework " << frameworkId
+                 << " because the executor is terminated";
     return;
   }
 

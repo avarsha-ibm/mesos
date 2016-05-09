@@ -58,6 +58,7 @@
 #include <stout/check.hpp>
 #include <stout/duration.hpp>
 #include <stout/error.hpp>
+#include <stout/foreach.hpp>
 #include <stout/ip.hpp>
 #include <stout/lambda.hpp>
 #include <stout/multihashmap.hpp>
@@ -1324,6 +1325,12 @@ void Master::exited(const UPID& pid)
 {
   foreachvalue (Framework* framework, frameworks.registered) {
     if (framework->pid == pid) {
+      // See comments in `receive()` on why we send an error message
+      // to the framework upon detecting a disconnection.
+      FrameworkErrorMessage message;
+      message.set_message("Framework disconnected");
+      framework->send(message);
+
       _exited(framework);
       return;
     }
@@ -2075,7 +2082,28 @@ void Master::receive(
     return;
   }
 
+  // This is possible when master --> framework link is broken (i.e., one
+  // way network partition) and the framework is not aware of it. There
+  // is no way for driver based frameworks to detect this in the absence
+  // of periodic heartbeat events. We send an error message to the framework
+  // causing the scheduler driver to abort when this happens.
+  if (!framework->connected) {
+    const string error = "Framework disconnected";
+
+    LOG(INFO) << "Refusing " << call.type() << " call from framework "
+              << *framework << ": " << error;
+
+    FrameworkErrorMessage message;
+    message.set_message(error);
+    send(from, message);
+    return;
+  }
+
   switch (call.type()) {
+    case scheduler::Call::SUBSCRIBE:
+      // SUBSCRIBE call should have been handled above.
+      LOG(FATAL) << "Unexpected 'SUBSCRIBE' call";
+
     case scheduler::Call::TEARDOWN:
       teardown(framework);
       break;
@@ -2120,10 +2148,8 @@ void Master::receive(
       suppress(framework);
       break;
 
-    default:
-      // Should be caught during call validation above.
-      LOG(FATAL) << "Unexpected " << call.type() << " call"
-                 << " from framework " << call.framework_id() << " at " << from;
+    case scheduler::Call::UNKNOWN:
+      LOG(WARNING) << "'UNKNOWN' call";
       break;
   }
 }
@@ -3073,7 +3099,7 @@ Future<bool> Master::authorizeReserveResources(
       .then([](const std::list<Future<bool>>& authorizations)
             -> Future<bool> {
         // Compute a disjunction.
-        for (const Future<bool>& authorization : authorizations) {
+        foreach (const Future<bool>& authorization, authorizations) {
           if (!authorization.get()) {
             return false;
           }
@@ -3126,7 +3152,7 @@ Future<bool> Master::authorizeUnreserveResources(
       .then([](const std::list<Future<bool>>& authorizations)
             -> Future<bool> {
         // Compute a disjunction.
-        for (const Future<bool>& authorization : authorizations) {
+        foreach (const Future<bool>& authorization, authorizations) {
           if (!authorization.get()) {
             return false;
           }
@@ -3178,7 +3204,7 @@ Future<bool> Master::authorizeCreateVolume(
       .then([](const std::list<Future<bool>>& authorizations)
             -> Future<bool> {
         // Compute a disjunction.
-        for (const Future<bool>& authorization : authorizations) {
+        foreach (const Future<bool>& authorization, authorizations) {
           if (!authorization.get()) {
             return false;
           }
@@ -3230,7 +3256,7 @@ Future<bool> Master::authorizeDestroyVolume(
       .then([](const std::list<Future<bool>>& authorizations)
             -> Future<bool> {
         // Compute a disjunction.
-        for (const Future<bool>& authorization : authorizations) {
+        foreach (const Future<bool>& authorization, authorizations) {
           if (!authorization.get()) {
             return false;
           }

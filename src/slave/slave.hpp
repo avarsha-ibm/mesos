@@ -83,6 +83,10 @@
 #endif // __WINDOWS__
 
 namespace mesos {
+
+// Forward declarations.
+class Authorizer;
+
 namespace internal {
 
 namespace slave {
@@ -106,7 +110,8 @@ public:
         GarbageCollector* gc,
         StatusUpdateManager* statusUpdateManager,
         mesos::slave::ResourceEstimator* resourceEstimator,
-        mesos::slave::QoSController* qosController);
+        mesos::slave::QoSController* qosController,
+        const Option<Authorizer*>& authorizer);
 
   virtual ~Slave();
 
@@ -434,7 +439,7 @@ private:
     // /slave/flags
     process::Future<process::http::Response> flags(
         const process::http::Request& request,
-        const Option<std::string>& /* principal */) const;
+        const Option<std::string>& principal) const;
 
     // /slave/health
     process::Future<process::http::Response> health(
@@ -449,15 +454,40 @@ private:
     // /slave/monitor/statistics.json
     process::Future<process::http::Response> statistics(
         const process::http::Request& request,
-        const Option<std::string>& /* principal */) const;
+        const Option<std::string>& principal) const;
+
+    // /slave/containers
+    process::Future<process::http::Response> containers(
+        const process::http::Request& request) const;
 
     static std::string EXECUTOR_HELP();
     static std::string FLAGS_HELP();
     static std::string HEALTH_HELP();
     static std::string STATE_HELP();
     static std::string STATISTICS_HELP();
+    static std::string CONTAINERS_HELP();
 
   private:
+    // Continuations.
+    static process::Future<process::http::Response> _flags(
+        const process::http::Request& request,
+        const Flags& flags);
+
+    // Authorizes access to an HTTP endpoint. It extracts the endpoint
+    // from the URL of the request by removing the "/slave(n)" part of
+    // the URL's path. The request's `method` determines which ACL action
+    // will be used in the authorization.
+    process::Future<bool> authorizeEndpoint(
+        const process::http::Request& request,
+        const Option<std::string>& principal) const;
+
+
+    // Make continuation for `statistics` `static` as it might
+    // execute when the invoking `Http` is already destructed.
+    static process::http::Response _statistics(
+        const ResourceUsage& usage,
+        const process::http::Request& request);
+
     Slave* slave;
 
     // Used to rate limit the statistics endpoint.
@@ -587,6 +617,8 @@ private:
   mesos::slave::ResourceEstimator* resourceEstimator;
 
   mesos::slave::QoSController* qosController;
+
+  const Option<Authorizer*> authorizer;
 
   // The most recent estimate of the total amount of oversubscribed
   // (allocated and oversubscribable) resources.

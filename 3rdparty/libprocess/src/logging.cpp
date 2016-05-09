@@ -25,7 +25,9 @@
 
 namespace process {
 
-Future<http::Response> Logging::toggle(const http::Request& request)
+Future<http::Response> Logging::toggle(
+    const http::Request& request,
+    const Option<std::string>& /* principal */)
 {
   Option<std::string> level = request.url.query.get("level");
   Option<std::string> duration = request.url.query.get("duration");
@@ -92,6 +94,7 @@ const std::string Logging::TOGGLE_HELP()
         ">        level=VALUE          Verbosity level (e.g., 1, 2, 3)",
         ">        duration=VALUE       Duration to keep verbosity level",
         ">                             toggled (e.g., 10secs, 15mins, etc.)"),
+    None(),
     None(),
     REFERENCES(
         "[glog]: https://code.google.com/p/google-glog"));

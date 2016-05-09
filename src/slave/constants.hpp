@@ -114,6 +114,9 @@ constexpr Duration DOCKER_FORCE_KILL_TIMEOUT = Seconds(1);
 // Name of the default, CRAM-MD5 authenticatee.
 constexpr char DEFAULT_AUTHENTICATEE[] = "crammd5";
 
+// Name of the default, local authorizer.
+constexpr char DEFAULT_AUTHORIZER[] = "local";
+
 // Name of the default HTTP authenticator.
 constexpr char DEFAULT_HTTP_AUTHENTICATOR[] = "basic";
 
@@ -126,9 +129,6 @@ constexpr Bytes DEFAULT_FETCHER_CACHE_SIZE = Gigabytes(2);
 // If no pings received within this timeout, then the slave will
 // trigger a re-detection of the master to cause a re-registration.
 Duration DEFAULT_MASTER_PING_TIMEOUT();
-
-// Container path that the slave sets to mount the command executor rootfs to.
-constexpr char COMMAND_EXECUTOR_ROOTFS_CONTAINER_PATH[] = ".rootfs";
 
 } // namespace slave {
 } // namespace internal {

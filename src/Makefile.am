@@ -25,10 +25,10 @@ include ../3rdparty/libprocess/3rdparty/versions.am
 
 # TODO(charles): Move these into an included automakefile and have
 # them include $(top_builddir) as appropriate.
-DISTRIBUTE = 3rdparty/distribute-$(DISTRIBUTE_VERSION)
-PIP = 3rdparty/pip-$(PIP_VERSION)
-WHEEL = 3rdparty/wheel-$(WHEEL_VERSION)
 LEVELDB = 3rdparty/leveldb-$(LEVELDB_VERSION)
+PIP = 3rdparty/pip-$(PIP_VERSION)
+SETUPTOOLS = 3rdparty/setuptools-$(SETUPTOOLS_VERSION)
+WHEEL = 3rdparty/wheel-$(WHEEL_VERSION)
 ZOOKEEPER = 3rdparty/zookeeper-$(ZOOKEEPER_VERSION)/src/c
 ZOOKEEPER_JAR = 3rdparty/zookeeper-$(ZOOKEEPER_VERSION)/zookeeper-$(ZOOKEEPER_VERSION).jar
 LIBPROCESS = 3rdparty/libprocess
@@ -237,6 +237,8 @@ CXX_PROTOS +=								\
   messages/messages.pb.h						\
   slave/containerizer/mesos/provisioner/docker/message.pb.cc		\
   slave/containerizer/mesos/provisioner/docker/message.pb.h		\
+  slave/containerizer/mesos/isolators/docker/volume/state.pb.cc		\
+  slave/containerizer/mesos/isolators/docker/volume/state.pb.h		\
   slave/containerizer/mesos/isolators/network/cni/spec.pb.cc		\
   slave/containerizer/mesos/isolators/network/cni/spec.pb.h
 
@@ -530,9 +532,9 @@ scheduler_HEADERS =							\
 nodist_scheduler_HEADERS =						\
   ../include/mesos/scheduler/scheduler.pb.h
 
-slavedir = $(pkgincludedir)/slave
+agentdir = $(pkgincludedir)/agent
 
-slave_HEADERS =								\
+agent_HEADERS =								\
   $(top_srcdir)/include/mesos/slave/container_logger.hpp		\
   $(top_srcdir)/include/mesos/slave/isolator.hpp			\
   $(top_srcdir)/include/mesos/slave/isolator.proto			\
@@ -541,7 +543,7 @@ slave_HEADERS =								\
   $(top_srcdir)/include/mesos/slave/qos_controller.hpp			\
   $(top_srcdir)/include/mesos/slave/resource_estimator.hpp
 
-nodist_slave_HEADERS =							\
+nodist_agent_HEADERS =							\
   ../include/mesos/slave/isolator.pb.h					\
   ../include/mesos/slave/oversubscription.pb.h
 
@@ -615,7 +617,7 @@ zookeeper_HEADERS =							\
 
 
 # We even use a convenience library for most of Mesos so that we can
-# exclude third party libraries so setuptools/distribute can build a
+# exclude third party libraries so setuptools can build a
 # self-contained Python library and statically link in the third party
 # libraries themselves.
 noinst_LTLIBRARIES += libmesos_no_3rdparty.la
@@ -628,6 +630,7 @@ libmesos_no_3rdparty_la_SOURCES =					\
   messages/flags.proto							\
   messages/messages.proto						\
   slave/containerizer/mesos/provisioner/docker/message.proto		\
+  slave/containerizer/mesos/isolators/docker/volume/state.proto		\
   slave/containerizer/mesos/isolators/network/cni/spec.proto
 
 # TODO(tillt): Remove authentication/cram_md5/* which will enable us to
@@ -715,6 +718,8 @@ libmesos_no_3rdparty_la_SOURCES +=					\
   slave/containerizer/mesos/launcher.cpp				\
   slave/containerizer/mesos/mount.cpp					\
   slave/containerizer/mesos/isolators/filesystem/posix.cpp		\
+  slave/containerizer/mesos/isolators/docker/volume/driver.cpp		\
+  slave/containerizer/mesos/isolators/docker/volume/paths.cpp		\
   slave/containerizer/mesos/isolators/network/cni/paths.cpp		\
   slave/containerizer/mesos/isolators/network/cni/spec.cpp		\
   slave/containerizer/mesos/isolators/posix/disk.cpp			\
@@ -831,7 +836,11 @@ libmesos_no_3rdparty_la_SOURCES +=					\
   slave/containerizer/mesos/isolators/posix.hpp				\
   slave/containerizer/mesos/isolators/filesystem/posix.hpp		\
   slave/containerizer/mesos/isolators/posix/disk.hpp			\
+  slave/containerizer/mesos/isolators/docker/volume/driver.hpp		\
+  slave/containerizer/mesos/isolators/docker/volume/paths.hpp		\
+  slave/containerizer/mesos/isolators/docker/volume/state.hpp		\
   slave/containerizer/mesos/isolators/network/cni/paths.hpp		\
+  slave/containerizer/mesos/isolators/network/cni/spec.hpp		\
   slave/containerizer/mesos/isolators/network/cni/spec.hpp		\
   slave/containerizer/mesos/provisioner/backend.hpp			\
   slave/containerizer/mesos/provisioner/paths.hpp			\
@@ -1582,7 +1591,7 @@ $(PROTOBUF_EGG):
 	  CXX="$(CXX)"					\
 	  CFLAGS="$(CFLAGS)"				\
 	  CXXFLAGS="$(CXXFLAGS)"			\
-	  PYTHONPATH=$(abs_top_builddir)/$(DISTRIBUTE)	\
+	  PYTHONPATH=$(abs_top_builddir)/$(SETUPTOOLS)	\
 	  $(PYTHON) setup.py build bdist_egg
 
 CLEANFILES += $(PROTOBUF_EGG)
@@ -1617,7 +1626,7 @@ MESOS_EGGS =										\
   python/dist/mesos.cli-$(PACKAGE_VERSION)$(PYTHON_EGG_PUREPY_POSTFIX).egg		\
   python/dist/mesos.executor-$(PACKAGE_VERSION)$(PYTHON_EGG_POSTFIX).egg		\
   python/dist/mesos.interface-$(PACKAGE_VERSION)$(PYTHON_EGG_PUREPY_POSTFIX).egg	\
-  python/dist/mesos.native-$(PACKAGE_VERSION)$(PYTHON_EGG_POSTFIX).egg			\
+  python/dist/mesos.native-$(PACKAGE_VERSION)$(PYTHON_EGG_PUREPY_POSTFIX).egg		\
   python/dist/mesos.scheduler-$(PACKAGE_VERSION)$(PYTHON_EGG_POSTFIX).egg
 
 MESOS_WHLS =										\
@@ -1625,7 +1634,7 @@ MESOS_WHLS =										\
   python/dist/mesos.cli-$(PACKAGE_VERSION)$(PYTHON_WHL_PUREPY_POSTFIX).whl		\
   python/dist/mesos.executor-$(PACKAGE_VERSION)$(PYTHON_WHL_POSTFIX).whl		\
   python/dist/mesos.interface-$(PACKAGE_VERSION)$(PYTHON_WHL_PUREPY_POSTFIX).whl	\
-  python/dist/mesos.native-$(PACKAGE_VERSION)$(PYTHON_WHL_POSTFIX).whl			\
+  python/dist/mesos.native-$(PACKAGE_VERSION)$(PYTHON_WHL_PUREPY_POSTFIX).whl		\
   python/dist/mesos.scheduler-$(PACKAGE_VERSION)$(PYTHON_WHL_POSTFIX).whl
 
 # The python source is in directories of the form: python/interface. The make
@@ -1642,13 +1651,13 @@ $(MESOS_EGGS) $(MESOS_WHLS):								\
 	LIBS="$(LIBS)" CC="$(CC)" CXX="$(CXX)"						\
 	CFLAGS="$(PYTHON_CFLAGS)" CPPFLAGS="$(PYTHON_CPPFLAGS)"				\
 	LDFLAGS="$(PYTHON_LDFLAGS)"							\
-	PYTHONPATH=$(abs_top_builddir)/$(DISTRIBUTE):$(abs_top_builddir)/$(WHEEL)	\
+	PYTHONPATH=$(abs_top_builddir)/$(SETUPTOOLS):$(abs_top_builddir)/$(WHEEL)	\
 	$(PYTHON) setup.py bdist_egg --dist-dir=$(abs_top_builddir)/src/python/dist	\
 	bdist_wheel --dist-dir=$(abs_top_builddir)/src/python/dist
 
 CLEANFILES += $(MESOS_EGGS) $(MESOS_WHLS) python/*/build python/*/dist $(PYTHON_SOURCE)
 
-pippythonpath = $(DESTDIR)$(pythondir):$(abs_top_builddir)/$(DISTRIBUTE):$(abs_top_builddir)/$(PIP):$(abs_top_builddir)/$(WHEEL)
+pippythonpath = $(DESTDIR)$(pythondir):$(abs_top_builddir)/$(SETUPTOOLS):$(abs_top_builddir)/$(PIP):$(abs_top_builddir)/$(WHEEL)
 
 # Some python installations create their own distutils.cfg (homebrew, redhat).
 # This includes `prefix=` which overrides anything set via. pip during install.
@@ -1980,6 +1989,7 @@ mesos_tests_SOURCES =						\
   tests/scheduler_http_api_tests.cpp				\
   tests/scheduler_tests.cpp					\
   tests/script.cpp						\
+  tests/slave_authorization_tests.cpp				\
   tests/slave_recovery_tests.cpp				\
   tests/slave_tests.cpp						\
   tests/sorter_tests.cpp					\
@@ -2035,6 +2045,7 @@ if OS_LINUX
 mesos_tests_SOURCES +=						\
   tests/containerizer/cgroups_isolator_tests.cpp		\
   tests/containerizer/cgroups_tests.cpp				\
+  tests/containerizer/docker_volume_isolator_tests.cpp		\
   tests/containerizer/runtime_isolator_tests.cpp		\
   tests/containerizer/filesystem_isolator_tests.cpp		\
   tests/containerizer/fs_tests.cpp				\
@@ -2132,19 +2143,24 @@ dist_testlibexec_SCRIPTS =			\
 
 endif
 
-# Copy mesos-agent-env.sh.template to mesos-slave-env.sh.template.
+# This target will do the following two things:
+# 1. Copy mesos-agent-env.sh.template to mesos-slave-env.sh.template.
+# 2. Create "slave->agent" symlink in the agent headers installation
+#    path.
 #
 # TODO(tomxing): Remove this target once the
-# slave->agent rename is complete(MESOS-3782).
-copy-agent-env-template:
+# slave->agent rename is complete(MESOS-3782 & MESOS-5230).
+copy-template-and-create-symlink:
 	cp $(DESTDIR)/$(pkgsysconfdir)/mesos-agent-env.sh.template \
-	  $(DESTDIR)/$(pkgsysconfdir)/mesos-slave-env.sh.template
+	  $(DESTDIR)/$(pkgsysconfdir)/mesos-slave-env.sh.template &&\
+	ln -s $(DESTDIR)/$(includedir)/mesos/agent \
+	  $(DESTDIR)/$(includedir)/mesos/slave
 
 # Install compatibility symlinks for modules that used to be in $(LIBDIR)
 # but are now in $(PKGMODULEDIR). We use install-data-hook because it
 # runs late in the install process after the target directories have
 # been created.
-install-data-hook: copy-agent-env-template
+install-data-hook: copy-template-and-create-symlink
 	cd $(DESTDIR)/$(libdir) && 				\
 	for name in libfixed_resource_estimator 		\
 	    libload_qos_controller 				\
@@ -2156,9 +2172,10 @@ install-data-hook: copy-agent-env-template
 	done
 
 # TODO(tomxing): Remove this hook once the
-# slave->agent rename is complete(MESOS-3782).
+# slave->agent rename is complete(MESOS-3782 & MESOS 5230).
 uninstall-hook:
-	rm -f $(DESTDIR)/$(pkgsysconfdir)/mesos-slave-env.sh.template
+	rm -f $(DESTDIR)/$(pkgsysconfdir)/mesos-slave-env.sh.template &&\
+	rm -f $(DESTDIR)/$(includedir)/mesos/slave
 
 # We use a check-local target for now to avoid the parallel test
 # runner that ships with newer versions of autotools.

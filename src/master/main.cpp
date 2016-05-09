@@ -198,23 +198,6 @@ int main(int argc, char** argv)
     return EXIT_SUCCESS;
   }
 
-  // Initialize modules. Note that since other subsystems may depend
-  // upon modules, we should initialize modules before anything else.
-  if (flags.modules.isSome()) {
-    Try<Nothing> result = ModuleManager::load(flags.modules.get());
-    if (result.isError()) {
-      EXIT(EXIT_FAILURE) << "Error loading modules: " << result.error();
-    }
-  }
-
-  // Initialize hooks.
-  if (flags.hooks.isSome()) {
-    Try<Nothing> result = HookManager::initialize(flags.hooks.get());
-    if (result.isError()) {
-      EXIT(EXIT_FAILURE) << "Error installing hooks: " << result.error();
-    }
-  }
-
   if (ip_discovery_command.isSome() && ip.isSome()) {
     EXIT(EXIT_FAILURE) << flags.usage(
         "Only one of `--ip` or `--ip_discovery_command` should be specified");
@@ -257,10 +240,33 @@ int main(int argc, char** argv)
     }
   }
 
-  // Initialize libprocess.
-  process::initialize("master");
+  // This should be the first invocation of `process::initialize`. If it returns
+  // `false`, then it has already been called, which means that the
+  // authentication realm for libprocess-level HTTP endpoints was not set to the
+  // correct value for the master.
+  if (!process::initialize("master", DEFAULT_HTTP_AUTHENTICATION_REALM)) {
+    EXIT(EXIT_FAILURE) << "The call to `process::initialize()` in the master's "
+                       << "`main()` was not the function's first invocation";
+  }
 
   logging::initialize(argv[0], flags, true); // Catch signals.
+
+  // Initialize modules. Note that since other subsystems may depend
+  // upon modules, we should initialize modules before anything else.
+  if (flags.modules.isSome()) {
+    Try<Nothing> result = ModuleManager::load(flags.modules.get());
+    if (result.isError()) {
+      EXIT(EXIT_FAILURE) << "Error loading modules: " << result.error();
+    }
+  }
+
+  // Initialize hooks.
+  if (flags.hooks.isSome()) {
+    Try<Nothing> result = HookManager::initialize(flags.hooks.get());
+    if (result.isError()) {
+      EXIT(EXIT_FAILURE) << "Error installing hooks: " << result.error();
+    }
+  }
 
   spawn(new VersionProcess(), true);
 

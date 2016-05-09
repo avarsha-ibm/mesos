@@ -775,7 +775,9 @@ void install(vector<Owned<FirewallRule>>&& rules)
 
 } // namespace firewall {
 
-void initialize(const Option<string>& delegate)
+bool initialize(
+    const Option<string>& delegate,
+    const Option<string>& authenticationRealm)
 {
   // TODO(benh): Return an error if attempting to initialize again
   // with a different delegate than originally specified.
@@ -797,7 +799,8 @@ void initialize(const Option<string>& delegate)
   // of initialization.  This is done because some methods called by
   // initialization will themselves call `process::initialize`.
   if (initialize_started.load() && initialize_complete.load()) {
-    return;
+    // Return `false` because `process::initialize()` was already called.
+    return false;
 
   } else {
     // NOTE: `compare_exchange_strong` needs an lvalue.
@@ -812,7 +815,9 @@ void initialize(const Option<string>& delegate)
     // initialization to complete.
     if (!initialize_started.compare_exchange_strong(expected, true)) {
       while (!initialize_complete.load());
-      return;
+
+      // Return `false` because `process::initialize()` was already called.
+      return false;
     }
   }
 
@@ -958,26 +963,52 @@ void initialize(const Option<string>& delegate)
   // process, and profiler always succeeds and use supervisors to make
   // sure that none terminate.
 
+  // For the global processes below, the order of initialization matters.
+  // Some global processes are necessary for the function of certain methods:
+  //
+  //   process | Underpins this method
+  //   --------|---------------------------
+  //   gc      | process::spawn(..., true)
+  //   help    | ProcessBase::route(...)
+  //   metrics | process::metrics::add(...)
+  //
+  // Due to the above, each global process must be started after the
+  // prerequisite global process(es) have been started. The following
+  // graph shows what processes depend on which other processes.
+  // Processes in the same vertical group can be safely started in any order.
+  //
+  //   gc
+  //   |--help
+  //   |  |--metrics
+  //   |  |  |--system
+  //   |  |  |--All other processes
+  //   |  |
+  //   |  |--logging
+  //   |  |--profiler
+  //   |  |--processesRoute
+  //   |
+  //   |--authentication_manager
+
   // Create global garbage collector process.
   gc = spawn(new GarbageCollector());
 
   // Create global help process.
   help = spawn(new Help(delegate), true);
 
+  // Initialize the global metrics process.
+  metrics::initialize(authenticationRealm);
+
   // Create the global logging process.
-  spawn(new Logging(), true);
+  spawn(new Logging(authenticationRealm), true);
 
   // Create the global profiler process.
-  spawn(new Profiler(), true);
+  spawn(new Profiler(authenticationRealm), true);
 
   // Create the global system statistics process.
   spawn(new System(), true);
 
   // Create the global HTTP authentication router.
   authenticator_manager = new AuthenticatorManager();
-
-  // Initialize the metrics process.
-  metrics::initialize();
 
   // Initialize the mime types.
   mime::initialize();
@@ -990,6 +1021,10 @@ void initialize(const Option<string>& delegate)
 
   VLOG(1) << "libprocess is initialized on " << address() << " with "
           << num_worker_threads << " worker threads";
+
+  // Return `true` to indicate that this was the first invocation of
+  // `process::initialize()`.
+  return true;
 }
 
 

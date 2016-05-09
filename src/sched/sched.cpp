@@ -285,7 +285,7 @@ protected:
       .onAny(defer(self(), &SchedulerProcess::detected, lambda::_1));
   }
 
-  void detected(const Future<Option<MasterInfo> >& _master)
+  void detected(const Future<Option<MasterInfo>>& _master)
   {
     if (!running.load()) {
       VLOG(1) << "Ignoring the master change because the driver is not"
@@ -671,7 +671,11 @@ protected:
         break;
       }
 
-      default: {
+      case Event::HEARTBEAT: {
+        break;
+      }
+
+      case Event::UNKNOWN: {
         drop(event, "Unknown event");
         break;
       }
@@ -1593,7 +1597,7 @@ private:
 
   const internal::scheduler::Flags flags;
 
-  hashmap<OfferID, hashmap<SlaveID, UPID> > savedOffers;
+  hashmap<OfferID, hashmap<SlaveID, UPID>> savedOffers;
   hashmap<SlaveID, UPID> savedSlavePids;
 
   // The driver optionally provides implicit acknowledgements
@@ -1608,7 +1612,7 @@ private:
   Authenticatee* authenticatee;
 
   // Indicates if an authentication attempt is in progress.
-  Option<Future<bool> > authenticating;
+  Option<Future<bool>> authenticating;
 
   // Indicates if the authentication is successful.
   bool authenticated;

@@ -98,6 +98,8 @@ namespace mesos {
 namespace internal {
 namespace tests {
 
+constexpr char DEFAULT_HTTP_AUTHENTICATION_REALM[] = "test-realm";
+
 // Forward declarations.
 class MockExecutor;
 
@@ -205,6 +207,12 @@ protected:
       mesos::master::detector::MasterDetector* detector,
       slave::Containerizer* containerizer,
       mesos::slave::QoSController* qosController,
+      const Option<slave::Flags>& flags = None());
+
+  // Starts a slave with the specified detector, authorizer, and flags.
+  virtual Try<process::Owned<cluster::Slave>> StartSlave(
+      mesos::master::detector::MasterDetector* detector,
+      mesos::Authorizer* authorizer,
       const Option<slave::Flags>& flags = None());
 
   Option<zookeeper::URL> zookeeperUrl;
@@ -662,6 +670,20 @@ inline google::protobuf::RepeatedPtrField<WeightInfo> createWeightInfos(
 }
 
 
+// Convert WeightInfos protobuf to weights hashmap.
+inline hashmap<std::string, double> convertToHashmap(
+    const google::protobuf::RepeatedPtrField<WeightInfo> weightInfos)
+{
+  hashmap<std::string, double> weights;
+
+  foreach (const WeightInfo& weightInfo, weightInfos) {
+    weights[weightInfo.role()] = weightInfo.weight();
+  }
+
+  return weights;
+}
+
+
 // Helpers for creating reserve operations.
 inline Offer::Operation RESERVE(const Resources& resources)
 {
@@ -711,6 +733,17 @@ inline Offer::Operation LAUNCH(const std::vector<TaskInfo>& tasks)
   }
 
   return operation;
+}
+
+
+inline Parameters parameterize(const ACLs& acls)
+{
+  Parameters parameters;
+  Parameter* parameter = parameters.add_parameter();
+  parameter->set_key("acls");
+  parameter->set_value(std::string(jsonify(JSON::Protobuf(acls))));
+
+  return parameters;
 }
 
 
@@ -953,8 +986,9 @@ public:
       case Event::HEARTBEAT:
         heartbeat(mesos);
         break;
-      default:
-        UNREACHABLE();
+      case Event::UNKNOWN:
+        LOG(FATAL) << "Received unexpected UNKNOWN event";
+        break;
     }
   }
 };
@@ -1080,8 +1114,9 @@ public:
       case Event::ERROR:
         error(mesos, event.error());
         break;
-      default:
-        UNREACHABLE();
+      case Event::UNKNOWN:
+        LOG(FATAL) << "Received unexpected UNKNOWN event";
+        break;
     }
   }
 };
@@ -1252,7 +1287,8 @@ public:
       const slave::Flags& flags,
       mesos::master::detector::MasterDetector* detector,
       slave::Containerizer* containerizer,
-      const Option<mesos::slave::QoSController*>& qosController = None());
+      const Option<mesos::slave::QoSController*>& qosController = None(),
+      const Option<mesos::Authorizer*>& authorizer = None());
 
   virtual ~MockSlave();
 
